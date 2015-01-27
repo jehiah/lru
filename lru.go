@@ -23,6 +23,10 @@
 
 package lru
 
+import (
+	"log"
+)
+
 type AddFunc func(interface{}) interface{}
 type RemovalFunc func(interface{}, interface{})
 
@@ -55,6 +59,7 @@ func (c *LRU) Get(key interface{}) (value interface{}, ok bool) {
 	} else {
 		if c.addFunc != nil {
 			value = c.addFunc(key)
+			log.Printf("Get() new value created %v %v", key, value)
 			c.insert(key, value)
 			ok = true
 		}
@@ -157,13 +162,26 @@ func (l *list) grow() (i int) {
 // Make the node at position i the front of the list.
 // Precondition: the list is not empty.
 func (l *list) moveToFront(i int) {
+	if i == l.front {
+		return
+	}
+
 	nf := &l.links[i]
 	of := &l.links[l.front]
 
+	if l.tail == i {
+		l.tail = nf.next
+		t := &l.links[l.tail]
+		t.prev = -1
+	}
+
 	nf.prev = l.front
+	nf.next = -1
 	of.next = i
 	l.front = i
 }
+// prev == towards tail
+// next == towards front
 
 // Pop the tail off the list and return its index and its key.
 // Precondition: the list is full.
