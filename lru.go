@@ -26,6 +26,7 @@ package lru
 import (
 	"container/list"
 	"sync"
+	"time"
 )
 
 type Key interface{}
@@ -35,8 +36,9 @@ type RemovalFunc func(Key, Value)
 
 // container for user data
 type entry struct {
-	Key   Key
-	Value Value
+	Key        Key
+	Value      Value
+	lastUpdate time.Time
 }
 
 // Cache for function Func.
@@ -48,11 +50,12 @@ type LRU struct {
 	table       map[Key]*list.Element
 	// how many entries we are lmiting to
 	capacity int
+	ttl      time.Duration // how long a value is considered good for (0 to disable)
 }
 
-// Create a new LRU cache with the desired capacity and optional functions to add new items, or
-// notify on removal
-func New(a AddFunc, r RemovalFunc, capacity int) *LRU {
+// Create a new LRU cache with the desired capacity and optional functions to fetch new items, or
+// notify on removal. If a TTL is set, entries will only be considered valid for the TTL duration
+func New(a AddFunc, r RemovalFunc, capacity int, ttl time.Duration) *LRU {
 	if capacity < 1 {
 		panic("capacity < 1")
 	}
@@ -63,6 +66,7 @@ func New(a AddFunc, r RemovalFunc, capacity int) *LRU {
 		list:        list.New(),
 		table:       make(map[Key]*list.Element),
 		capacity:    capacity,
+		ttl:         ttl,
 	}
 }
 
@@ -80,6 +84,25 @@ func (lru *LRU) Get(key Key) (v Value, ok bool) {
 			return v, true
 		}
 		return nil, false
+	}
+	e := element.Value.(*entry)
+	if lru.ttl > 0 {
+		delta := time.Now().Sub(e.lastUpdate)
+		if delta > lru.ttl {
+			if lru.removalFunc != nil {
+				lru.removalFunc(e.Key, e.Value)
+			}
+			lru.list.Remove(element)
+			delete(lru.table, key)
+
+			// now we also need to conditionally fill this
+			if lru.addFunc != nil {
+				v := lru.addFunc(key)
+				lru.addNew(key, v)
+				return v, true
+			}
+			return nil, false
+		}
 	}
 	lru.list.MoveToFront(element)
 	return element.Value.(*entry).Value, true
@@ -104,6 +127,11 @@ func (lru *LRU) Delete(key Key) bool {
 	element := lru.table[key]
 	if element == nil {
 		return false
+	}
+
+	if lru.removalFunc != nil {
+		n := element.Value.(*entry)
+		lru.removalFunc(n.Key, n.Value)
 	}
 
 	lru.list.Remove(element)
@@ -143,12 +171,20 @@ func (lru *LRU) Flush() {
 }
 
 func (lru *LRU) updateInplace(element *list.Element, value Value) {
-	element.Value.(*entry).Value = value
+	e := element.Value.(*entry)
+	e.Value = value
+	if lru.ttl > 0 {
+		e.lastUpdate = time.Now()
+	}
 	lru.list.MoveToFront(element)
 }
 
 func (lru *LRU) addNew(key Key, value Value) {
-	element := lru.list.PushFront(&entry{key, value})
+	e := &entry{Key: key, Value: value}
+	if lru.ttl > 0 {
+		e.lastUpdate = time.Now()
+	}
+	element := lru.list.PushFront(e)
 	lru.table[key] = element
 	lru.checkCapacity()
 }

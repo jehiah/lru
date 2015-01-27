@@ -33,7 +33,7 @@ func NewLRUCounter(removalFunc func(interface{}, int64), capacity int) *LRUCount
 		vv := value.(int64)
 		removalFunc(key, vv)
 	}
-	l := New(nil, r, capacity)
+	l := New(nil, r, capacity, 0)
 	return &LRUCounter{l}
 }
 
