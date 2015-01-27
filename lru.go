@@ -24,18 +24,30 @@
 package lru
 
 import (
-	"log"
+	"container/list"
+	"sync"
 )
 
-type AddFunc func(interface{}) interface{}
-type RemovalFunc func(interface{}, interface{})
+type Key interface{}
+type Value interface{}
+type AddFunc func(Key) Value
+type RemovalFunc func(Key, Value)
+
+// container for user data
+type entry struct {
+	Key   Key
+	Value Value
+}
 
 // Cache for function Func.
 type LRU struct {
+	mu          sync.Mutex
 	addFunc     AddFunc
 	removalFunc RemovalFunc
-	index       map[interface{}]int // index of key in queue
-	queue       list
+	list        *list.List
+	table       map[Key]*list.Element
+	// how many entries we are lmiting to
+	capacity int
 }
 
 // Create a new LRU cache with the desired capacity and optional functions to add new items, or
@@ -44,173 +56,112 @@ func New(a AddFunc, r RemovalFunc, capacity int) *LRU {
 	if capacity < 1 {
 		panic("capacity < 1")
 	}
-	c := &LRU{addFunc: a, removalFunc: r, index: make(map[interface{}]int)}
-	c.queue.init(capacity)
-	return c
+
+	return &LRU{
+		addFunc:     a,
+		removalFunc: r,
+		list:        list.New(),
+		table:       make(map[Key]*list.Element),
+		capacity:    capacity,
+	}
 }
 
 // Fetch value for key in the cache, calling AddFunc to compute it if necessary.
 // This updates the values position in the LRU cache
-func (c *LRU) Get(key interface{}) (value interface{}, ok bool) {
-	i, ok := c.index[key]
-	if ok {
-		value = c.queue.valueAt(i)
-		c.queue.moveToFront(i)
-	} else {
-		if c.addFunc != nil {
-			value = c.addFunc(key)
-			log.Printf("Get() new value created %v %v", key, value)
-			c.insert(key, value)
-			ok = true
+func (lru *LRU) Get(key Key) (v Value, ok bool) {
+	lru.mu.Lock()
+	defer lru.mu.Unlock()
+
+	element := lru.table[key]
+	if element == nil {
+		if lru.addFunc != nil {
+			v := lru.addFunc(key)
+			lru.addNew(key, v)
+			return v, true
 		}
+		return nil, false
 	}
-	return value, ok
+	lru.list.MoveToFront(element)
+	return element.Value.(*entry).Value, true
 }
 
 // Set a new entry in the LRU cache
-func (c *LRU) Set(key, value interface{}) {
-	i, ok := c.index[key]
-	if ok {
-		c.queue.links[i].value = value
-		c.queue.moveToFront(i)
+func (lru *LRU) Set(key Key, value Value) {
+	lru.mu.Lock()
+	defer lru.mu.Unlock()
+
+	if element := lru.table[key]; element != nil {
+		lru.updateInplace(element, value)
 	} else {
-		c.insert(key, value)
+		lru.addNew(key, value)
 	}
 }
 
-// Number of items currently in the LRU cache.
-func (c *LRU) Len() int {
-	return len(c.queue.links)
+func (lru *LRU) Delete(key Key) bool {
+	lru.mu.Lock()
+	defer lru.mu.Unlock()
+
+	element := lru.table[key]
+	if element == nil {
+		return false
+	}
+
+	lru.list.Remove(element)
+	delete(lru.table, key)
+	return true
 }
 
-func (c *LRU) Capacity() int {
-	return cap(c.queue.links)
+// Number of items currently in the LRU cache.
+func (lru *LRU) Len() int {
+	return lru.list.Len()
+}
+
+func (lru *LRU) Capacity() int {
+	return lru.capacity
 }
 
 // Iterate over the cache in LRU order. Useful for debugging.
-func (c *LRU) Iter(keys chan interface{}, values chan interface{}) {
-	for i := c.queue.tail; i != -1; {
-		n := c.queue.links[i]
-		keys <- n.key
-		values <- n.value
-		i = n.next
+func (lru *LRU) Iter(keys chan Key, values chan Value) {
+	for e := lru.list.Front(); e != nil; e = e.Next() {
+		keys <- e.Value.(*entry).Key
+		values <- e.Value.(*entry).Value
 	}
 	close(keys)
 	close(values)
 }
 
 // Flush all entries calling RemovalFunc as needed
-func (c *LRU) Flush() {
-	if c.removalFunc != nil {
-		for i := c.queue.tail; i != -1; {
-			n := c.queue.links[i]
-			c.removalFunc(n.key, n.value)
-			i = n.next
+func (lru *LRU) Flush() {
+	if lru.removalFunc != nil {
+		for e := lru.list.Front(); e != nil; e = e.Next() {
+			n := e.Value.(*entry)
+			lru.removalFunc(n.Key, n.Value)
 		}
 	}
-	c.index = make(map[interface{}]int)
-	c.queue.init(cap(c.queue.links))
+	lru.list.Init()
+	lru.table = make(map[Key]*list.Element)
 }
 
-func (c *LRU) insert(key interface{}, value interface{}) {
-	var i int
-	q := &c.queue
-	if q.full() {
-		// evict least recently used item
-		var k, v interface{}
-		i, k, v = q.popTail()
-		if c.removalFunc != nil {
-			c.removalFunc(k, v)
+func (lru *LRU) updateInplace(element *list.Element, value Value) {
+	element.Value.(*entry).Value = value
+	lru.list.MoveToFront(element)
+}
+
+func (lru *LRU) addNew(key Key, value Value) {
+	element := lru.list.PushFront(&entry{key, value})
+	lru.table[key] = element
+	lru.checkCapacity()
+}
+
+func (lru *LRU) checkCapacity() {
+	// Partially duplicated from Delete
+	for lru.list.Len() > lru.capacity {
+		delElem := lru.list.Back()
+		delValue := delElem.Value.(*entry)
+		lru.list.Remove(delElem)
+		delete(lru.table, delValue.Key)
+		if lru.removalFunc != nil {
+			lru.removalFunc(delValue.Key, delValue.Value)
 		}
-		delete(c.index, k)
-	} else {
-		i = q.grow()
 	}
-	q.putFront(key, value, i)
-	c.index[key] = i
-}
-
-// Doubly linked list containing key/value pairs.
-type list struct {
-	front, tail, empty int
-	links              []link
-}
-
-type link struct {
-	key, value interface{}
-	prev, next int
-}
-
-// Initialize l with capacity c.
-func (l *list) init(c int) {
-	l.front = -1
-	l.tail = -1
-	l.links = make([]link, 0, c)
-}
-
-func (l *list) full() bool {
-	return len(l.links) == cap(l.links)
-}
-
-// Grow list by one element and return its index.
-func (l *list) grow() (i int) {
-	i = len(l.links)
-	l.links = l.links[:i+1]
-	return
-}
-
-// Make the node at position i the front of the list.
-// Precondition: the list is not empty.
-func (l *list) moveToFront(i int) {
-	if i == l.front {
-		return
-	}
-
-	nf := &l.links[i]
-	of := &l.links[l.front]
-
-	if l.tail == i {
-		l.tail = nf.next
-		t := &l.links[l.tail]
-		t.prev = -1
-	}
-
-	nf.prev = l.front
-	nf.next = -1
-	of.next = i
-	l.front = i
-}
-// prev == towards tail
-// next == towards front
-
-// Pop the tail off the list and return its index and its key.
-// Precondition: the list is full.
-func (l *list) popTail() (i int, key, value interface{}) {
-	i = l.tail
-	t := &l.links[i]
-	key = t.key
-	value = t.value
-	l.links[t.next].prev = -1
-	l.tail = t.next
-	return
-}
-
-// Put (key, value) in position i and make it the front of the list.
-func (l *list) putFront(key, value interface{}, i int) {
-	f := &l.links[i]
-	f.key = key
-	f.value = value
-	f.prev = l.front
-	f.next = -1
-
-	if l.tail == -1 {
-		l.tail = i
-	} else {
-		l.links[l.front].next = i
-	}
-	l.front = i
-}
-
-func (l *list) valueAt(i int) interface{} {
-	return l.links[i].value
 }

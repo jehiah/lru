@@ -1,20 +1,20 @@
 package lru
 
 import (
-	"testing"
 	"log"
+	"testing"
 )
 
 func TestLRU(t *testing.T) {
 	var total int64
 	var removed int64
 	var removedKeys []string
-	newItem := func(k interface{}) interface{} {
+	newItem := func(k Key) Value {
 		total += 1
 		log.Printf("newItem %d", total)
 		return total
 	}
-	removal := func(k, v interface{}) {
+	removal := func(k Key, v Value) {
 		log.Printf("removal %v %v", k, v)
 		removed++
 		removedKeys = append(removedKeys, k.(string))

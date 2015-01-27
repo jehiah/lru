@@ -29,7 +29,7 @@ type LRUCounter struct {
 
 // Create a new LRU cache for function f with the desired capacity.
 func NewLRUCounter(removalFunc func(interface{}, int64), capacity int) *LRUCounter {
-	r := func(key, value interface{}) {
+	r := func(key Key, value Value) {
 		vv := value.(int64)
 		removalFunc(key, vv)
 	}
