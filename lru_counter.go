@@ -23,12 +23,14 @@
 package lru
 
 import (
+	"sync"
 	"time"
 )
 
 // a LRU counter that calls a function when an item is removed
 type LRUCounter struct {
 	lru *LRU
+	sync.Mutex
 }
 
 // Create a new LRU cache for removalFunc with the desired capacity and ttl.
@@ -79,9 +81,12 @@ func (c *LRUCounter) FlushExpired() {
 	c.lru.FlushExpired()
 }
 
+// Incr the key by value (goroutine safe)
 func (c *LRUCounter) Incr(key interface{}, value int64) {
+	c.Lock()
 	if vv, ok := c.Get(key); ok {
 		value += vv
 	}
 	c.lru.Set(key, value)
+	c.Unlock()
 }
