@@ -56,12 +56,42 @@ func TestExpiry(t *testing.T) {
 	if !ok {
 		t.Errorf("entry should still be there")
 	}
-	time.Sleep(10 * time.Millisecond)
-	_, ok = lru.Get("key")
-	if ok {
-		t.Errorf("entry should be expired, but isn't")
+	for i := 0; i < 10; i++ {
+		time.Sleep(5 * time.Millisecond)
+		lru.Set("key", i)
+	}
+	if _, ok = lru.Get("key"); !ok {
+		t.Errorf("entry should not be expired (we updated it less than 20ms ago)")
+	}
+
+	for i := 0; i < 10; i++ {
+		time.Sleep(5 * time.Millisecond)
+		lru.Get("key")
+		lru.Set("key", i)
+	}
+	if _, ok = lru.Get("key"); !ok {
+		t.Errorf("entry should not be expired (we updated it less than 20ms ago)")
+	}
+	if removed != 0 {
+		t.Errorf("unexpected removal")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if _, ok = lru.Get("key"); ok {
+		t.Errorf("should be gone now")
 	}
 	if removed != 1 {
-		t.Errorf("removal didn't happen")
+		t.Errorf("unexpected removal")
 	}
+
+	lru.DisableTouchOnUpdate()
+	for i := 0; i < 10; i++ {
+		time.Sleep(5 * time.Millisecond)
+		lru.Get("key")
+		lru.Set("key", i)
+	}
+	if removed != 5 {
+		t.Errorf("removal at %d expected %d", removed, 5)
+	}
+
 }

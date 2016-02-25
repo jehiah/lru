@@ -22,19 +22,33 @@
 
 package lru
 
+import (
+	"time"
+)
+
 // a LRU counter that calls a function when an item is removed
 type LRUCounter struct {
 	lru *LRU
 }
 
-// Create a new LRU cache for function f with the desired capacity.
-func NewLRUCounter(removalFunc func(interface{}, int64), capacity int) *LRUCounter {
+// Create a new LRU cache for removalFunc with the desired capacity and ttl.
+func NewLRUCounterTTL(removalFunc func(interface{}, int64), capacity int, ttl time.Duration) *LRUCounter {
 	r := func(key Key, value Value) {
 		vv := value.(int64)
 		removalFunc(key, vv)
 	}
-	l := New(nil, r, capacity, 0)
+	l := New(nil, r, capacity, ttl)
 	return &LRUCounter{l}
+}
+
+// Create a new LRU cache for removalFunc with the desired capacity.
+func NewLRUCounter(removalFunc func(interface{}, int64), capacity int) *LRUCounter {
+	return NewLRUCounterTTL(removalFunc, capacity, 0)
+}
+
+// DisableTouchOnUpdate changes weather the timestamp used to compare TTL is updated when an element is updated
+func (c *LRUCounter) DisableTouchOnUpdate() {
+	c.lru.DisableTouchOnUpdate()
 }
 
 // Fetch value for key in the cache, updating it's LRU position
@@ -55,8 +69,14 @@ func (c *LRUCounter) Capacity() int {
 	return c.lru.Capacity()
 }
 
+// Flush all entries
 func (c *LRUCounter) Flush() {
 	c.lru.Flush()
+}
+
+// FlushExpired flushes entries that are expired based on the configured TTL
+func (c *LRUCounter) FlushExpired() {
+	c.lru.FlushExpired()
 }
 
 func (c *LRUCounter) Incr(key interface{}, value int64) {

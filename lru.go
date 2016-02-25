@@ -36,9 +36,9 @@ type RemovalFunc func(Key, Value)
 
 // container for user data
 type entry struct {
-	Key        Key
-	Value      Value
-	lastUpdate time.Time
+	Key   Key
+	Value Value
+	ts    time.Time
 }
 
 // Cache for function Func.
@@ -49,8 +49,16 @@ type LRU struct {
 	list        *list.List
 	table       map[Key]*list.Element
 	// how many entries we are lmiting to
-	capacity int
-	ttl      time.Duration // how long a value is considered good for (0 to disable)
+	capacity          int
+	ttl               time.Duration // how long a value is considered good for (0 to disable)
+	touchTimeOnUpdate bool
+}
+
+// DisableTouchOnUpdate changes weather the timestamp used to compare TTL is updated when an element is updated
+func (lru *LRU) DisableTouchOnUpdate() {
+	lru.mu.Lock()
+	defer lru.mu.Unlock()
+	lru.touchTimeOnUpdate = false
 }
 
 // Create a new LRU cache with the desired capacity and optional functions to fetch new items, or
@@ -61,12 +69,13 @@ func New(a AddFunc, r RemovalFunc, capacity int, ttl time.Duration) *LRU {
 	}
 
 	return &LRU{
-		addFunc:     a,
-		removalFunc: r,
-		list:        list.New(),
-		table:       make(map[Key]*list.Element),
-		capacity:    capacity,
-		ttl:         ttl,
+		addFunc:           a,
+		removalFunc:       r,
+		list:              list.New(),
+		table:             make(map[Key]*list.Element),
+		capacity:          capacity,
+		ttl:               ttl,
+		touchTimeOnUpdate: true,
 	}
 }
 
@@ -87,7 +96,7 @@ func (lru *LRU) Get(key Key) (v Value, ok bool) {
 	}
 	e := element.Value.(*entry)
 	if lru.ttl > 0 {
-		delta := time.Now().Sub(e.lastUpdate)
+		delta := time.Now().Sub(e.ts)
 		if delta > lru.ttl {
 			if lru.removalFunc != nil {
 				lru.removalFunc(e.Key, e.Value)
@@ -108,7 +117,7 @@ func (lru *LRU) Get(key Key) (v Value, ok bool) {
 	return element.Value.(*entry).Value, true
 }
 
-// Set a new entry in the LRU cache
+// Set a new entry in the LRU cache. Set will not evict based on TTL
 func (lru *LRU) Set(key Key, value Value) {
 	lru.mu.Lock()
 	defer lru.mu.Unlock()
@@ -120,6 +129,7 @@ func (lru *LRU) Set(key Key, value Value) {
 	}
 }
 
+// Delete an entry in the LRU cache (calling removalFunc if necesary)
 func (lru *LRU) Delete(key Key) bool {
 	lru.mu.Lock()
 	defer lru.mu.Unlock()
@@ -160,6 +170,8 @@ func (lru *LRU) Iter(keys chan Key, values chan Value) {
 
 // Flush all entries calling RemovalFunc as needed
 func (lru *LRU) Flush() {
+	lru.mu.Lock()
+	defer lru.mu.Unlock()
 	if lru.removalFunc != nil {
 		for e := lru.list.Front(); e != nil; e = e.Next() {
 			n := e.Value.(*entry)
@@ -170,11 +182,28 @@ func (lru *LRU) Flush() {
 	lru.table = make(map[Key]*list.Element)
 }
 
+// Flush entries where TTL has expired calling RemovalFunc as needed
+func (lru *LRU) FlushExpired() {
+	if lru.removalFunc == nil || lru.ttl == 0 {
+		return
+	}
+
+	cutoff := time.Now().Add(-1 * lru.ttl)
+	for e := lru.list.Front(); e != nil; e = e.Next() {
+		n := e.Value.(*entry)
+		if cutoff.After(n.ts) {
+			lru.list.Remove(e)
+			delete(lru.table, n.Key)
+			lru.removalFunc(n.Key, n.Value)
+		}
+	}
+}
+
 func (lru *LRU) updateInplace(element *list.Element, value Value) {
 	e := element.Value.(*entry)
 	e.Value = value
-	if lru.ttl > 0 {
-		e.lastUpdate = time.Now()
+	if lru.ttl > 0 && lru.touchTimeOnUpdate {
+		e.ts = time.Now()
 	}
 	lru.list.MoveToFront(element)
 }
@@ -182,7 +211,7 @@ func (lru *LRU) updateInplace(element *list.Element, value Value) {
 func (lru *LRU) addNew(key Key, value Value) {
 	e := &entry{Key: key, Value: value}
 	if lru.ttl > 0 {
-		e.lastUpdate = time.Now()
+		e.ts = time.Now()
 	}
 	element := lru.list.PushFront(e)
 	lru.table[key] = element
