@@ -40,7 +40,7 @@ func NewLRUCounterTTL(removalFunc func(interface{}, int64), capacity int, ttl ti
 		removalFunc(key, vv)
 	}
 	l := New(nil, r, capacity, ttl)
-	return &LRUCounter{l}
+	return &LRUCounter{lru: l}
 }
 
 // Create a new LRU cache for removalFunc with the desired capacity.
