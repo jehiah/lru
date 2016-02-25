@@ -193,7 +193,10 @@ func (lru *LRU) FlushExpired() {
 	defer lru.mu.Unlock()
 
 	cutoff := time.Now().Add(-1 * lru.ttl)
-	for e := lru.list.Front(); e != nil; e = e.Next() {
+	var next *list.Element
+	for e := lru.list.Front(); e != nil; e = next {
+		// get the next before removal below which causes Next to return nil
+		next = e.Next()
 		n := e.Value.(*entry)
 		if cutoff.After(n.ts) {
 			lru.list.Remove(e)
