@@ -71,6 +71,10 @@ func (c *LRUCounter) Capacity() int {
 	return c.lru.Capacity()
 }
 
+func (c *LRUCounter) Iter(keys chan Key, values chan Value) {
+	c.lru.Iter(keys, values)
+}
+
 // Flush all entries
 func (c *LRUCounter) Flush() {
 	c.lru.Flush()
