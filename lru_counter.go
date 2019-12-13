@@ -77,12 +77,16 @@ func (c *LRUCounter) Iter(keys chan Key, values chan Value) {
 
 // Flush all entries
 func (c *LRUCounter) Flush() {
+	c.Lock()
 	c.lru.Flush()
+	c.Unlock()
 }
 
 // FlushExpired flushes entries that are expired based on the configured TTL
 func (c *LRUCounter) FlushExpired() {
+	c.Lock()
 	c.lru.FlushExpired()
+	c.Unlock()
 }
 
 // Incr the key by value (goroutine safe)
