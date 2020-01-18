@@ -1,7 +1,6 @@
 package lru
 
 import (
-	"log"
 	"testing"
 	"time"
 )
@@ -12,11 +11,11 @@ func TestLRU(t *testing.T) {
 	var removedKeys []string
 	newItem := func(k Key) Value {
 		total += 1
-		log.Printf("newItem %d", total)
+		t.Logf("newItem %d", total)
 		return total
 	}
 	removal := func(k Key, v Value) {
-		log.Printf("removal %v %v", k, v)
+		t.Logf("removal %v %v", k, v)
 		removed++
 		removedKeys = append(removedKeys, k.(string))
 	}
@@ -47,7 +46,7 @@ func TestLRU(t *testing.T) {
 func TestExpiry(t *testing.T) {
 	var removed int64
 	removal := func(k Key, v Value) {
-		log.Printf("removal %v %v", k, v)
+		t.Logf("removal %v %v", k, v)
 		removed++
 	}
 	lru := New(nil, removal, 4, 10*time.Millisecond)
@@ -94,4 +93,44 @@ func TestExpiry(t *testing.T) {
 		t.Errorf("removal at %d expected %d", removed, 5)
 	}
 
+}
+
+func TestFlushN(t *testing.T) {
+	var total int64
+	var removed int64
+	var removedKeys []string
+	newItem := func(k Key) Value {
+		total += 1
+		t.Logf("newItem %d", total)
+		return total
+	}
+	removal := func(k Key, v Value) {
+		t.Logf("removal %v %v", k, v)
+		removed++
+		removedKeys = append(removedKeys, k.(string))
+	}
+	lru := New(newItem, removal, 4, 0)
+	for _, k := range []string{"key1", "key2", "key3", "key4"} {
+		if v, ok := lru.Get(k); ok && v.(int64) != total {
+			t.Errorf("%s got %d expected %d", k, v, total)
+		}
+	}
+	// key2 should be the LRU
+	for _, k := range []string{"key2", "key1", "key3", "key4"} {
+		lru.Get(k)
+	}
+	if removed != 0 {
+		t.Fatalf("expected removed=0 but got %d", removed)
+	}
+	lru.FlushN(2)
+	if removed != 2 {
+		t.Fatalf("expected 2 got %d", removed)
+	}
+	t.Logf("remeoved keys %#v", removedKeys)
+	if removedKeys[0] != "key2" {
+		t.Fatal("unexpected removed key")
+	}
+	if removedKeys[1] != "key1" {
+		t.Fatal("unexpected removed key")
+	}
 }
