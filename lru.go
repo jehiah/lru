@@ -206,6 +206,32 @@ func (lru *LRU) FlushExpired() {
 	}
 }
 
+// FlushN flushes the N least recently used items from the LRU calling RemovalFunc as needed
+func (lru *LRU) FlushN(n int) {
+	if n < 1 {
+		panic("FlushN must be called with > 0")
+	}
+	lru.mu.Lock()
+	defer lru.mu.Unlock()
+
+	var next *list.Element
+	var i int
+	for e := lru.list.Back(); e != nil; e = next {
+		// get the next before removal below which causes Next to return nil
+		next = e.Prev()
+		v := e.Value.(*entry)
+		lru.list.Remove(e)
+		delete(lru.table, v.Key)
+		if lru.removalFunc != nil {
+			lru.removalFunc(v.Key, v.Value)
+		}
+		i++
+		if i >= n {
+			break
+		}
+	}
+}
+
 func (lru *LRU) updateInplace(element *list.Element, value Value) {
 	e := element.Value.(*entry)
 	e.Value = value
